@@ -188,10 +188,15 @@ function formatCell(cell) {
   const val = cell.value
   if (val === null || val === undefined) return { v: '', num: null }
 
-  // Native hyperlink: { text: "...", hyperlink: "http://..." }
+  // Native hyperlink: { text: "..." or {richText: [...]}, hyperlink: "http://..." }
   if (typeof val === 'object' && val.hyperlink) {
-    const text = val.text || val.hyperlink
-    return { v: String(text), num: null, link: val.hyperlink }
+    let text = val.hyperlink
+    if (typeof val.text === 'string') {
+      text = val.text
+    } else if (val.text && val.text.richText) {
+      text = val.text.richText.map((rt) => rt.text).join('')
+    }
+    return { v: text, num: null, link: val.hyperlink }
   }
 
   // Formula cell — use cached result
