@@ -1,0 +1,18 @@
+{
+  "name": "excel-reader",
+  "version": "1.0.0",
+  "description": "Electron app to display Excel files on macOS",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-packager . 'Excel Reader' --platform=darwin --arch=universal --out=dist --overwrite --icon=icon.icns --ignore=\"^/dist$\" --ignore=\"^/screenshots$\" --no-asar --extend-info=extend-info.plist"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "ssf": "^0.11.2"
+  },
+  "devDependencies": {
+    "@electron/packager": "^19.1.0",
+    "electron": "^28.0.0"
+  }
+}
