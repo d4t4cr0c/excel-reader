@@ -344,9 +344,80 @@ function parseSheet(exWs, palette, hlMap) {
   }
 }
 
+// Parse a CSV file into the same format as parseSheet output
+function parseCsvContent(text) {
+  // Parse CSV handling quoted fields with commas/newlines
+  const rows = []
+  let current = ''
+  let inQuotes = false
+  let row = []
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (inQuotes) {
+      if (ch === '"' && text[i + 1] === '"') {
+        current += '"'
+        i++
+      } else if (ch === '"') {
+        inQuotes = false
+      } else {
+        current += ch
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true
+      } else if (ch === ',') {
+        row.push(current)
+        current = ''
+      } else if (ch === '\n' || (ch === '\r' && text[i + 1] === '\n')) {
+        row.push(current)
+        current = ''
+        if (row.some((c) => c !== '')) rows.push(row)
+        row = []
+        if (ch === '\r') i++
+      } else if (ch === '\r') {
+        row.push(current)
+        current = ''
+        if (row.some((c) => c !== '')) rows.push(row)
+        row = []
+      } else {
+        current += ch
+      }
+    }
+  }
+  // Last field/row
+  row.push(current)
+  if (row.some((c) => c !== '')) rows.push(row)
+
+  // Convert to cell format
+  const maxCols = rows.reduce((max, r) => Math.max(max, r.length), 0)
+  const cellRows = rows.map((r) => {
+    const cells = []
+    for (let c = 0; c < maxCols; c++) {
+      cells.push({ v: r[c] || '', css: '' })
+    }
+    return cells
+  })
+
+  return { rows: cellRows, colWidths: [] }
+}
+
 async function parseFile(filePath) {
+  const ext = path.extname(filePath).toLowerCase()
   const buffer = fs.readFileSync(filePath)
 
+  // CSV/TSV: plain text parsing
+  if (ext === '.csv' || ext === '.tsv') {
+    const text = buffer.toString('utf-8')
+    const sheetName = 'Sheet1'
+    return {
+      fileName: path.basename(filePath),
+      sheetNames: [sheetName],
+      sheets: { [sheetName]: parseCsvContent(text) },
+    }
+  }
+
+  // Excel formats
   const meta = await parseXlsxMeta(buffer)
   const palette = meta.palette || DEFAULT_INDEXED_COLORS
 
@@ -368,7 +439,7 @@ ipcMain.handle('open-and-parse-file', async (event) => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
     properties: ['openFile'],
     filters: [
-      { name: 'Excel Files', extensions: ['xlsx', 'xls', 'xlsm', 'csv'] },
+      { name: 'Excel Files', extensions: ['xlsx', 'xls', 'xlsm', 'csv', 'tsv'] },
       { name: 'All Files', extensions: ['*'] },
     ],
   })
