@@ -5,11 +5,12 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-packager . 'Excel Reader' --platform=darwin --arch=universal --out=dist --overwrite --icon=icon.icns --ignore=\"^/dist$\" --ignore=\"^/screenshots$\" --no-asar --extend-info=extend-info.plist"
+    "build": "electron-packager . 'Excel Reader' --platform=darwin --arch=arm64 --out=dist --overwrite --icon=icon --prune=true --ignore=\"^/dist$\" --ignore=\"^/screenshots$\" --ignore=\"^/excel-examples$\" --ignore=\"^/\\.git($|/)\" --ignore=\"^/tests?($|/)\" --ignore=\"(^|/)__tests__($|/)\" --ignore=\"\\.md$\" --ignore=\"\\.map$\" --extend-info=extend-info.plist"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
-    "ssf": "^0.11.2"
+    "ssf": "^0.11.2",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-latest/xlsx-latest.tgz"
   },
   "devDependencies": {
     "@electron/packager": "^19.1.0",

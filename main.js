@@ -4,6 +4,7 @@ const fs = require('fs')
 const ExcelJS = require('exceljs')
 const JSZip = require('jszip')
 const SSF = require('ssf')
+const XLSX = require('xlsx')
 
 let pendingFilePaths = [] // files received before app is ready
 
@@ -272,12 +273,43 @@ function colToLetter(c) {
   return name
 }
 
+// Parse an Excel range like "B1:D1" into {s:{r,c}, e:{r,c}} (0-based)
+function decodeRange(ref) {
+  const m = ref.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/)
+  if (!m) return null
+  const colFromLetter = (s) => {
+    let n = 0
+    for (const ch of s) n = n * 26 + (ch.charCodeAt(0) - 64)
+    return n - 1
+  }
+  return {
+    s: { r: parseInt(m[2]) - 1, c: colFromLetter(m[1]) },
+    e: { r: parseInt(m[4]) - 1, c: colFromLetter(m[3]) },
+  }
+}
+
 // Parse a single worksheet (ExcelJS only)
 function parseSheet(exWs, palette, hlMap) {
   if (!exWs || exWs.rowCount === 0) return { rows: [], colWidths: [] }
 
   const maxRow = exWs.rowCount
   const maxCol = exWs.columnCount
+
+  // Build merge map from worksheet model: "r,c" (1-based) -> {rowspan,colspan} or {skip:true}
+  const mergeMap = {}
+  const mergeRefs = exWs.model?.merges || []
+  for (const ref of mergeRefs) {
+    const range = decodeRange(ref)
+    if (!range) continue
+    const { s, e } = range
+    mergeMap[`${s.r + 1},${s.c + 1}`] = { rowspan: e.r - s.r + 1, colspan: e.c - s.c + 1 }
+    for (let rr = s.r; rr <= e.r; rr++) {
+      for (let cc = s.c; cc <= e.c; cc++) {
+        if (rr === s.r && cc === s.c) continue
+        mergeMap[`${rr + 1},${cc + 1}`] = { skip: true }
+      }
+    }
+  }
 
   const rows = []
   const rawNums = []
@@ -301,6 +333,11 @@ function parseSheet(exWs, palette, hlMap) {
 
       const cellData = { v, css }
       if (link) cellData.link = link
+      const m = mergeMap[`${r},${c}`]
+      if (m) {
+        if (m.skip) cellData.skip = true
+        else { cellData.rowspan = m.rowspan; cellData.colspan = m.colspan }
+      }
       row.push(cellData)
       numRow.push(num)
     }
@@ -338,10 +375,135 @@ function parseSheet(exWs, palette, hlMap) {
     rows: rows.map((row) => row.map((cell) => {
       const out = { v: cell.v ?? '', css: cell.css }
       if (cell.link) out.link = cell.link
+      if (cell.skip) out.skip = true
+      if (cell.rowspan) out.rowspan = cell.rowspan
+      if (cell.colspan) out.colspan = cell.colspan
       return out
     })),
     colWidths,
   }
+}
+
+// Build inline CSS for a SheetJS cell's style block
+function getXlsCellCSS(cell) {
+  const s = cell.s
+  if (!s) return ''
+  const parts = []
+
+  const font = s.font || {}
+  if (font.bold)      parts.push('font-weight:bold')
+  if (font.italic)    parts.push('font-style:italic')
+  if (font.underline) parts.push('text-decoration:underline')
+  if (font.strike)    parts.push('text-decoration:line-through')
+  if (font.sz)        parts.push(`font-size:${font.sz}pt`)
+
+  if (font.color && font.color.rgb) {
+    const hex = font.color.rgb.length === 8 ? font.color.rgb.slice(2) : font.color.rgb
+    if (!/^000000$/i.test(hex)) parts.push(`color:#${hex}`)
+  }
+
+  const fill = s.fill || {}
+  const fillRgb = fill.fgColor?.rgb || fill.bgColor?.rgb
+  if (fillRgb) {
+    const hex = fillRgb.length === 8 ? fillRgb.slice(2) : fillRgb
+    if (!/^FFFFFF$/i.test(hex)) parts.push(`background-color:#${hex}`)
+  }
+
+  const align = s.alignment || {}
+  if (align.horizontal === 'center')      parts.push('text-align:center')
+  else if (align.horizontal === 'right')  parts.push('text-align:right')
+  else if (align.horizontal === 'left')   parts.push('text-align:left')
+
+  return parts.join(';')
+}
+
+// Convert a SheetJS cell to the renderer's { v, css, link? } shape
+function formatXlsCell(cell) {
+  if (!cell) return { v: '', css: '' }
+
+  let v = ''
+  if (cell.w !== undefined && cell.w !== null) {
+    v = cell.w
+  } else if (cell.v !== undefined && cell.v !== null) {
+    if (cell.v instanceof Date) v = cell.v.toLocaleDateString()
+    else if (typeof cell.v === 'boolean') v = cell.v ? 'TRUE' : 'FALSE'
+    else v = String(cell.v)
+  }
+
+  const out = { v, css: getXlsCellCSS(cell) }
+  if (cell.l && cell.l.Target) out.link = cell.l.Target
+  return out
+}
+
+// Parse a single SheetJS worksheet into { rows, colWidths }
+function parseXlsSheet(ws) {
+  if (!ws || !ws['!ref']) return { rows: [], colWidths: [] }
+
+  const range = XLSX.utils.decode_range(ws['!ref'])
+  const minRow = range.s.r
+  const maxRow = range.e.r
+  const minCol = range.s.c
+  const maxCol = range.e.c
+
+  // Build merge map from SheetJS !merges: "r,c" (0-based) -> {rowspan,colspan} or {skip:true}
+  const mergeMap = {}
+  const wsMerges = ws['!merges'] || []
+  for (const { s, e } of wsMerges) {
+    mergeMap[`${s.r},${s.c}`] = { rowspan: e.r - s.r + 1, colspan: e.c - s.c + 1 }
+    for (let rr = s.r; rr <= e.r; rr++) {
+      for (let cc = s.c; cc <= e.c; cc++) {
+        if (rr === s.r && cc === s.c) continue
+        mergeMap[`${rr},${cc}`] = { skip: true }
+      }
+    }
+  }
+
+  const rows = []
+  for (let r = minRow; r <= maxRow; r++) {
+    const row = []
+    for (let c = minCol; c <= maxCol; c++) {
+      const addr = XLSX.utils.encode_cell({ r, c })
+      const cellData = formatXlsCell(ws[addr])
+      const m = mergeMap[`${r},${c}`]
+      if (m) {
+        if (m.skip) cellData.skip = true
+        else { cellData.rowspan = m.rowspan; cellData.colspan = m.colspan }
+      }
+      row.push(cellData)
+    }
+    rows.push(row)
+  }
+
+  // Column widths: SheetJS exposes wpx (pixels) or wch (chars); fall back to ~7px per char
+  const cols = ws['!cols'] || []
+  const colWidths = []
+  for (let c = minCol; c <= maxCol; c++) {
+    const col = cols[c]
+    if (col?.wpx) colWidths.push(Math.round(col.wpx))
+    else if (col?.wch) colWidths.push(Math.round(col.wch * 7))
+    else colWidths.push(null)
+  }
+
+  return { rows, colWidths }
+}
+
+// Parse a legacy .xls (BIFF) file using SheetJS — ExcelJS doesn't support this format
+function parseXlsBuffer(buffer, fileName) {
+  const wb = XLSX.read(buffer, {
+    type: 'buffer',
+    cellStyles: true,
+    cellNF: true,
+    cellDates: true,
+    cellFormula: true,
+    cellHTML: false,
+  })
+
+  const sheetNames = wb.SheetNames
+  const sheets = {}
+  for (const name of sheetNames) {
+    sheets[name] = parseXlsSheet(wb.Sheets[name])
+  }
+  return { fileName, sheetNames, sheets }
 }
 
 // Parse a CSV file into the same format as parseSheet output
@@ -417,7 +579,12 @@ async function parseFile(filePath) {
     }
   }
 
-  // Excel formats
+  // Legacy .xls (BIFF) — ExcelJS only handles OOXML, so use SheetJS
+  if (ext === '.xls') {
+    return parseXlsBuffer(buffer, path.basename(filePath))
+  }
+
+  // Modern Excel formats (.xlsx, .xlsm)
   const meta = await parseXlsxMeta(buffer)
   const palette = meta.palette || DEFAULT_INDEXED_COLORS
 

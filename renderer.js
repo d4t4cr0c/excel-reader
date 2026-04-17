@@ -75,13 +75,17 @@ function renderSheet(sheetData) {
     html += `<tr><td class="row-num">${r + 1}</td>`
     for (let c = 0; c < numCols; c++) {
       const cell = row[c] || { v: '', css: '' }
+      if (cell.skip) continue
       const value = cell.v !== undefined ? String(cell.v) : ''
       const isNum = value !== '' && !isNaN(value) && !value.includes('/')
       const styleAttr = cell.css ? ` style="${escapeAttr(cell.css)}"` : ''
+      const spanAttr =
+        (cell.rowspan > 1 ? ` rowspan="${cell.rowspan}"` : '') +
+        (cell.colspan > 1 ? ` colspan="${cell.colspan}"` : '')
       const content = cell.link
         ? `<a href="${escapeAttr(cell.link)}" target="_blank" rel="noopener">${escapeHtml(value)}</a>`
         : escapeHtml(value)
-      html += `<td class="${isNum ? 'numeric' : ''}"${styleAttr} title="${escapeAttr(value)}">${content}</td>`
+      html += `<td class="${isNum ? 'numeric' : ''}"${styleAttr}${spanAttr} title="${escapeAttr(value)}">${content}</td>`
     }
     html += '</tr>'
   })
