@@ -5,6 +5,12 @@ const openBtnCenter = document.getElementById('open-btn-center')
 const dropZone = document.getElementById('drop-zone')
 const tableContainer = document.getElementById('table-container')
 const sheetTabs = document.getElementById('sheet-tabs')
+const searchInput = document.getElementById('search-input')
+const searchCount = document.getElementById('search-count')
+
+let searchMatches = []
+let currentMatchIndex = -1
+let lastSearchQuery = ''
 
 async function openFile() {
   const result = await window.api.openAndParseFile()
@@ -37,6 +43,7 @@ function selectSheet(name) {
     t.classList.toggle('active', t.textContent === name)
   })
   if (workbookData) renderSheet(workbookData.sheets[name])
+  clearSearch()
 }
 
 function renderSheet(sheetData) {
@@ -115,6 +122,102 @@ function escapeAttr(str) {
 
 openBtn.addEventListener('click', openFile)
 openBtnCenter.addEventListener('click', openFile)
+
+function clearSearch() {
+  searchMatches = []
+  currentMatchIndex = -1
+  lastSearchQuery = ''
+  if (searchCount) searchCount.textContent = ''
+  tableContainer.querySelectorAll('mark.search-hit').forEach((m) => {
+    const parent = m.parentNode
+    parent.replaceChild(document.createTextNode(m.textContent), m)
+    parent.normalize()
+  })
+}
+
+function highlightMatches(query) {
+  const q = query.toLowerCase()
+  const matches = []
+  const cells = tableContainer.querySelectorAll('tbody td:not(.row-num)')
+  cells.forEach((td) => {
+    const text = td.textContent
+    if (!text.toLowerCase().includes(q)) return
+    highlightInNode(td, q)
+    td.querySelectorAll('mark.search-hit').forEach((m) => matches.push(m))
+  })
+  return matches
+}
+
+function highlightInNode(node, qLower) {
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, null)
+  const textNodes = []
+  let n
+  while ((n = walker.nextNode())) textNodes.push(n)
+  textNodes.forEach((tn) => {
+    const text = tn.nodeValue
+    const lower = text.toLowerCase()
+    let idx = lower.indexOf(qLower)
+    if (idx === -1) return
+    const frag = document.createDocumentFragment()
+    let cursor = 0
+    while (idx !== -1) {
+      if (idx > cursor) frag.appendChild(document.createTextNode(text.slice(cursor, idx)))
+      const mark = document.createElement('mark')
+      mark.className = 'search-hit'
+      mark.textContent = text.slice(idx, idx + qLower.length)
+      frag.appendChild(mark)
+      cursor = idx + qLower.length
+      idx = lower.indexOf(qLower, cursor)
+    }
+    if (cursor < text.length) frag.appendChild(document.createTextNode(text.slice(cursor)))
+    tn.parentNode.replaceChild(frag, tn)
+  })
+}
+
+function focusMatch(i) {
+  if (searchMatches.length === 0) return
+  searchMatches.forEach((m) => m.classList.remove('current'))
+  currentMatchIndex = ((i % searchMatches.length) + searchMatches.length) % searchMatches.length
+  const mark = searchMatches[currentMatchIndex]
+  mark.classList.add('current')
+  mark.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' })
+  searchCount.textContent = `${currentMatchIndex + 1}/${searchMatches.length}`
+}
+
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    searchInput.value = ''
+    clearSearch()
+    searchInput.blur()
+    return
+  }
+  if ((e.key === 'Tab' || e.key === 'Enter') && searchMatches.length > 1) {
+    e.preventDefault()
+    focusMatch(currentMatchIndex + (e.shiftKey ? -1 : 1))
+  }
+})
+
+searchInput.addEventListener('input', () => {
+  const query = searchInput.value.trim()
+  if (query === lastSearchQuery) return
+  clearSearch()
+  if (!query) return
+  lastSearchQuery = query
+  searchMatches = highlightMatches(query)
+  if (searchMatches.length === 0) {
+    searchCount.textContent = '0/0'
+    return
+  }
+  focusMatch(0)
+})
+
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+    e.preventDefault()
+    searchInput.focus()
+    searchInput.select()
+  }
+})
 
 // Handle files opened via Finder (right-click > Open With, etc.)
 window.api.onOpenFile(async (filePath) => {

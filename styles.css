@@ -33,6 +33,47 @@ body {
   color: #1d1d1f;
 }
 
+#titlebar-right {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#search-input {
+  background: #f5f5f7;
+  border: 1px solid #d2d2d7;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  width: 200px;
+}
+
+#search-input:focus {
+  border-color: #0071e3;
+  background: #fff;
+}
+
+#search-count {
+  font-size: 11px;
+  color: #6e6e73;
+  min-width: 40px;
+}
+
+mark.search-hit {
+  background: #ffe066;
+  color: inherit;
+  padding: 0;
+  border-radius: 2px;
+}
+
+mark.search-hit.current {
+  background: #ff9500;
+  color: #fff;
+}
+
 #open-btn {
   -webkit-app-region: no-drag;
   background: #0071e3;
