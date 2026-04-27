@@ -184,6 +184,19 @@ function parseHyperlink(formula) {
   return null
 }
 
+// Decode XML/HTML numeric and named character references (e.g. &#225; → á)
+function decodeEntities(s) {
+  if (typeof s !== 'string' || s.indexOf('&') === -1) return s
+  return s
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(parseInt(d, 10)))
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+}
+
 // Format an ExcelJS cell value into a display string, returning { v, num, link }
 function formatCell(cell) {
   const val = cell.value
@@ -373,8 +386,9 @@ function parseSheet(exWs, palette, hlMap) {
 
   return {
     rows: rows.map((row) => row.map((cell) => {
-      const out = { v: cell.v ?? '', css: cell.css }
-      if (cell.link) out.link = cell.link
+      const rawV = cell.v ?? ''
+      const out = { v: typeof rawV === 'string' ? decodeEntities(rawV) : rawV, css: cell.css }
+      if (cell.link) out.link = decodeEntities(cell.link)
       if (cell.skip) out.skip = true
       if (cell.rowspan) out.rowspan = cell.rowspan
       if (cell.colspan) out.colspan = cell.colspan
@@ -430,8 +444,8 @@ function formatXlsCell(cell) {
     else v = String(cell.v)
   }
 
-  const out = { v, css: getXlsCellCSS(cell) }
-  if (cell.l && cell.l.Target) out.link = cell.l.Target
+  const out = { v: decodeEntities(v), css: getXlsCellCSS(cell) }
+  if (cell.l && cell.l.Target) out.link = decodeEntities(cell.l.Target)
   return out
 }
 

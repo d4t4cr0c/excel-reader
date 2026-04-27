@@ -123,11 +123,21 @@ function escapeAttr(str) {
 openBtn.addEventListener('click', openFile)
 openBtnCenter.addEventListener('click', openFile)
 
+tableContainer.addEventListener('click', (e) => {
+  const td = e.target.closest('td')
+  if (!td || td.classList.contains('row-num')) return
+  if (e.target.closest('a')) return
+  td.classList.toggle('cell-expanded')
+})
+
 function clearSearch() {
   searchMatches = []
   currentMatchIndex = -1
   lastSearchQuery = ''
   if (searchCount) searchCount.textContent = ''
+  tableContainer.querySelectorAll('td.search-current-cell').forEach((td) => {
+    td.classList.remove('search-current-cell')
+  })
   tableContainer.querySelectorAll('mark.search-hit').forEach((m) => {
     const parent = m.parentNode
     parent.replaceChild(document.createTextNode(m.textContent), m)
@@ -177,9 +187,14 @@ function highlightInNode(node, qLower) {
 function focusMatch(i) {
   if (searchMatches.length === 0) return
   searchMatches.forEach((m) => m.classList.remove('current'))
+  tableContainer.querySelectorAll('td.search-current-cell').forEach((td) => {
+    td.classList.remove('search-current-cell')
+  })
   currentMatchIndex = ((i % searchMatches.length) + searchMatches.length) % searchMatches.length
   const mark = searchMatches[currentMatchIndex]
   mark.classList.add('current')
+  const td = mark.closest('td')
+  if (td) td.classList.add('search-current-cell')
   mark.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' })
   searchCount.textContent = `${currentMatchIndex + 1}/${searchMatches.length}`
 }
