@@ -313,7 +313,31 @@ tableContainer.addEventListener('mousedown', (e) => {
 
 tableContainer.addEventListener('mousemove', (e) => {
   if (!isSelecting) return
-  const td = e.target.closest('td[data-row]')
+  lastPointer = { x: e.clientX, y: e.clientY }
+  updateFocusFromPointer(e.clientX, e.clientY)
+  updateAutoScroll(e.clientX, e.clientY)
+})
+
+document.addEventListener('mouseup', () => {
+  isSelecting = false
+  stopAutoScroll()
+})
+
+let lastPointer = null
+let autoScrollRAF = null
+let autoScrollDX = 0
+let autoScrollDY = 0
+
+function updateFocusFromPointer(x, y) {
+  let el = document.elementFromPoint(x, y)
+  let td = el && el.closest ? el.closest('td[data-row]') : null
+  if (!td) {
+    const rect = tableContainer.getBoundingClientRect()
+    const cx = Math.min(Math.max(x, rect.left + 1), rect.right - 1)
+    const cy = Math.min(Math.max(y, rect.top + 1), rect.bottom - 1)
+    el = document.elementFromPoint(cx, cy)
+    td = el && el.closest ? el.closest('td[data-row]') : null
+  }
   if (!td) return
   const r = parseInt(td.dataset.row, 10)
   const c = parseInt(td.dataset.col, 10)
@@ -321,11 +345,55 @@ tableContainer.addEventListener('mousemove', (e) => {
   if (selectionFocus && selectionFocus.r === r && selectionFocus.c === c) return
   selectionFocus = { r, c }
   applySelection()
-})
+}
 
-document.addEventListener('mouseup', () => {
-  isSelecting = false
-})
+function updateAutoScroll(x, y) {
+  const rect = tableContainer.getBoundingClientRect()
+  const margin = 40
+  const maxSpeed = 24
+
+  let dx = 0
+  let dy = 0
+  if (y < rect.top + margin) dy = -ramp(rect.top + margin - y, margin, maxSpeed)
+  else if (y > rect.bottom - margin) dy = ramp(y - (rect.bottom - margin), margin, maxSpeed)
+  if (x < rect.left + margin) dx = -ramp(rect.left + margin - x, margin, maxSpeed)
+  else if (x > rect.right - margin) dx = ramp(x - (rect.right - margin), margin, maxSpeed)
+
+  autoScrollDX = dx
+  autoScrollDY = dy
+
+  if (dx === 0 && dy === 0) {
+    stopAutoScroll()
+  } else if (autoScrollRAF === null) {
+    autoScrollRAF = requestAnimationFrame(autoScrollTick)
+  }
+}
+
+function ramp(distance, margin, maxSpeed) {
+  const t = Math.min(distance / margin, 1)
+  return Math.max(1, Math.round(t * maxSpeed))
+}
+
+function autoScrollTick() {
+  autoScrollRAF = null
+  if (!isSelecting) return
+  if (autoScrollDX === 0 && autoScrollDY === 0) return
+  const beforeLeft = tableContainer.scrollLeft
+  const beforeTop = tableContainer.scrollTop
+  tableContainer.scrollLeft = beforeLeft + autoScrollDX
+  tableContainer.scrollTop = beforeTop + autoScrollDY
+  if (lastPointer) updateFocusFromPointer(lastPointer.x, lastPointer.y)
+  autoScrollRAF = requestAnimationFrame(autoScrollTick)
+}
+
+function stopAutoScroll() {
+  autoScrollDX = 0
+  autoScrollDY = 0
+  if (autoScrollRAF !== null) {
+    cancelAnimationFrame(autoScrollRAF)
+    autoScrollRAF = null
+  }
+}
 
 function clearSearch() {
   searchMatches = []
