@@ -52,6 +52,8 @@ function renderSheet(sheetData) {
 
   const rows = sheetData.rows || sheetData
   const colWidths = sheetData.colWidths || []
+  const freezeRows = sheetData.freezeRows || 0
+  const freezeCols = sheetData.freezeCols || 0
 
   if (!rows || rows.length === 0) {
     tableContainer.innerHTML = '<p style="padding:20px;color:#6e6e73">This sheet is empty.</p>'
@@ -99,6 +101,51 @@ function renderSheet(sheetData) {
 
   html += '</tbody></table>'
   tableContainer.innerHTML = html
+
+  applyFreeze(freezeRows, freezeCols)
+}
+
+function applyFreeze(freezeRows, freezeCols) {
+  const table = tableContainer.querySelector('table')
+  if (!table) return
+  const thead = table.querySelector('thead')
+  const tbody = table.querySelector('tbody')
+  if (!thead || !tbody) return
+
+  const headerHeight = thead.offsetHeight || 0
+  const bodyRows = Array.from(tbody.querySelectorAll('tr'))
+
+  // Frozen rows: first N tbody rows stick below the header
+  let topAcc = headerHeight
+  for (let i = 0; i < freezeRows && i < bodyRows.length; i++) {
+    const tr = bodyRows[i]
+    Array.from(tr.children).forEach((cell) => {
+      cell.classList.add('frozen-row')
+      cell.style.top = `${topAcc}px`
+    })
+    topAcc += tr.offsetHeight
+  }
+
+  if (freezeCols <= 0) return
+
+  // Frozen columns: row-num + first N data cols stick to the left
+  const headerTr = thead.querySelector('tr')
+  const allRows = headerTr ? [headerTr, ...bodyRows] : bodyRows
+  if (allRows.length === 0) return
+
+  const firstRow = bodyRows[0] || headerTr
+  const widths = Array.from(firstRow.children).map((c) => c.offsetWidth)
+
+  const stickyLefts = [0]
+  for (let i = 0; i <= freezeCols; i++) stickyLefts.push((stickyLefts[i] || 0) + (widths[i] || 0))
+
+  for (const tr of allRows) {
+    const cells = Array.from(tr.children)
+    for (let i = 0; i <= freezeCols && i < cells.length; i++) {
+      cells[i].classList.add('frozen-col')
+      cells[i].style.left = `${stickyLefts[i]}px`
+    }
+  }
 }
 
 function colLetter(index) {

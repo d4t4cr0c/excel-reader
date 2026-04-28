@@ -265,13 +265,21 @@ function formatNumber(n, numFmt) {
   }
 }
 
-// Format a date using SSF or fallback to locale string
+// Format a date using SSF or fallback to locale string.
+// ExcelJS returns dates as UTC midnight; converting to an Excel serial keeps
+// the calendar day stable regardless of the host timezone (otherwise users
+// west of UTC would see dates shifted one day earlier).
+const EXCEL_EPOCH_UTC_MS = Date.UTC(1899, 11, 30)
+function toExcelSerial(d) {
+  return (d.getTime() - EXCEL_EPOCH_UTC_MS) / 86400000
+}
 function formatDate(d, numFmt) {
-  if (!numFmt || numFmt === 'General') return d.toLocaleDateString()
+  const utcMidnight = new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+  if (!numFmt || numFmt === 'General') return utcMidnight.toLocaleDateString()
   try {
-    return SSF.format(numFmt, d)
+    return SSF.format(numFmt, toExcelSerial(d))
   } catch {
-    return d.toLocaleDateString()
+    return utcMidnight.toLocaleDateString()
   }
 }
 
@@ -384,6 +392,11 @@ function parseSheet(exWs, palette, hlMap) {
     colWidths.push(w ? Math.round(w * 7) : null)
   }
 
+  // Frozen panes (xSplit = frozen cols, ySplit = frozen rows)
+  const view = (exWs.views || [])[0]
+  const freezeRows = view && view.state === 'frozen' ? (view.ySplit || 0) : 0
+  const freezeCols = view && view.state === 'frozen' ? (view.xSplit || 0) : 0
+
   return {
     rows: rows.map((row) => row.map((cell) => {
       const rawV = cell.v ?? ''
@@ -395,6 +408,8 @@ function parseSheet(exWs, palette, hlMap) {
       return out
     })),
     colWidths,
+    freezeRows,
+    freezeCols,
   }
 }
 
@@ -498,7 +513,11 @@ function parseXlsSheet(ws) {
     else colWidths.push(null)
   }
 
-  return { rows, colWidths }
+  const freeze = ws['!freeze']
+  const freezeRows = freeze?.ySplit || freeze?.r || 0
+  const freezeCols = freeze?.xSplit || freeze?.c || 0
+
+  return { rows, colWidths, freezeRows, freezeCols }
 }
 
 // Parse a legacy .xls (BIFF) file using SheetJS — ExcelJS doesn't support this format
