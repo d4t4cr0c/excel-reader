@@ -1,4 +1,7 @@
 let workbookData = null
+let currentSheetRows = null
+let currentNumRows = 0
+let currentNumCols = 0
 
 const openBtn = document.getElementById('open-btn')
 const openBtnCenter = document.getElementById('open-btn-center')
@@ -11,6 +14,10 @@ const searchCount = document.getElementById('search-count')
 let searchMatches = []
 let currentMatchIndex = -1
 let lastSearchQuery = ''
+
+let selectionAnchor = null
+let selectionFocus = null
+let isSelecting = false
 
 async function openFile() {
   const result = await window.api.openAndParseFile()
@@ -44,6 +51,7 @@ function selectSheet(name) {
   })
   if (workbookData) renderSheet(workbookData.sheets[name])
   clearSearch()
+  clearSelection()
 }
 
 function renderSheet(sheetData) {
@@ -61,6 +69,9 @@ function renderSheet(sheetData) {
   }
 
   const numCols = rows.reduce((max, row) => Math.max(max, row.length), 0)
+  currentSheetRows = rows
+  currentNumRows = rows.length
+  currentNumCols = numCols
 
   const colHeaders = []
   for (let c = 0; c < numCols; c++) {
@@ -77,24 +88,26 @@ function renderSheet(sheetData) {
   html += '</colgroup>'
 
   html += '<thead><tr><th class="row-header"></th>'
-  colHeaders.forEach((h) => { html += `<th>${h}</th>` })
+  colHeaders.forEach((h, c) => { html += `<th data-col="${c}">${h}</th>` })
   html += '</tr></thead><tbody>'
 
   rows.forEach((row, r) => {
-    html += `<tr><td class="row-num">${r + 1}</td>`
+    html += `<tr><td class="row-num" data-rownum="${r}">${r + 1}</td>`
     for (let c = 0; c < numCols; c++) {
       const cell = row[c] || { v: '', css: '' }
       if (cell.skip) continue
       const value = cell.v !== undefined ? String(cell.v) : ''
       const isNum = value !== '' && !isNaN(value) && !value.includes('/')
       const styleAttr = cell.css ? ` style="${escapeAttr(cell.css)}"` : ''
+      const rowspan = cell.rowspan > 1 ? cell.rowspan : 1
+      const colspan = cell.colspan > 1 ? cell.colspan : 1
       const spanAttr =
-        (cell.rowspan > 1 ? ` rowspan="${cell.rowspan}"` : '') +
-        (cell.colspan > 1 ? ` colspan="${cell.colspan}"` : '')
+        (rowspan > 1 ? ` rowspan="${rowspan}"` : '') +
+        (colspan > 1 ? ` colspan="${colspan}"` : '')
       const content = cell.link
         ? `<a href="${escapeAttr(cell.link)}" target="_blank" rel="noopener">${escapeHtml(value)}</a>`
         : escapeHtml(value)
-      html += `<td class="${isNum ? 'numeric' : ''}"${styleAttr}${spanAttr} title="${escapeAttr(value)}">${content}</td>`
+      html += `<td class="${isNum ? 'numeric' : ''}"${styleAttr}${spanAttr} data-row="${r}" data-col="${c}" data-rowspan="${rowspan}" data-colspan="${colspan}" title="${escapeAttr(value)}">${content}</td>`
     }
     html += '</tr>'
   })
@@ -170,11 +183,148 @@ function escapeAttr(str) {
 openBtn.addEventListener('click', openFile)
 openBtnCenter.addEventListener('click', openFile)
 
-tableContainer.addEventListener('click', (e) => {
+tableContainer.addEventListener('dblclick', (e) => {
   const td = e.target.closest('td')
   if (!td || td.classList.contains('row-num')) return
   if (e.target.closest('a')) return
   td.classList.toggle('cell-expanded')
+})
+
+function clearSelection() {
+  selectionAnchor = null
+  selectionFocus = null
+  isSelecting = false
+  tableContainer.querySelectorAll('td.cell-selected').forEach((td) => {
+    td.classList.remove('cell-selected')
+  })
+}
+
+function selectionRect() {
+  if (!selectionAnchor || !selectionFocus) return null
+  return {
+    r1: Math.min(selectionAnchor.r, selectionFocus.r),
+    r2: Math.max(selectionAnchor.r, selectionFocus.r),
+    c1: Math.min(selectionAnchor.c, selectionFocus.c),
+    c2: Math.max(selectionAnchor.c, selectionFocus.c),
+  }
+}
+
+function applySelection() {
+  tableContainer.querySelectorAll('td.cell-selected').forEach((td) => {
+    td.classList.remove('cell-selected')
+  })
+  const rect = selectionRect()
+  if (!rect) return
+  const cells = tableContainer.querySelectorAll('td[data-row]')
+  cells.forEach((td) => {
+    const r = parseInt(td.dataset.row, 10)
+    const c = parseInt(td.dataset.col, 10)
+    const rs = parseInt(td.dataset.rowspan || '1', 10)
+    const cs = parseInt(td.dataset.colspan || '1', 10)
+    if (r > rect.r2 || r + rs - 1 < rect.r1) return
+    if (c > rect.c2 || c + cs - 1 < rect.c1) return
+    td.classList.add('cell-selected')
+  })
+}
+
+function copySelection() {
+  const rect = selectionRect()
+  if (!rect || !currentSheetRows) return
+  const lines = []
+  for (let r = rect.r1; r <= rect.r2; r++) {
+    const row = currentSheetRows[r] || []
+    const cells = []
+    for (let c = rect.c1; c <= rect.c2; c++) {
+      const cell = row[c]
+      if (!cell || cell.skip || cell.v === undefined || cell.v === null) {
+        cells.push('')
+        continue
+      }
+      const s = String(cell.v)
+      cells.push(/[\t\n\r"]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s)
+    }
+    lines.push(cells.join('\t'))
+  }
+  const text = lines.join('\n')
+  navigator.clipboard.writeText(text).catch(() => {
+    // Fallback for older contexts
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    try { document.execCommand('copy') } catch (_) {}
+    document.body.removeChild(ta)
+  })
+}
+
+tableContainer.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return
+  if (e.target.closest('a')) return
+
+  const rowNum = e.target.closest('td.row-num')
+  if (rowNum) {
+    e.preventDefault()
+    const r = parseInt(rowNum.dataset.rownum, 10)
+    if (Number.isNaN(r)) return
+    if (e.shiftKey && selectionAnchor) {
+      selectionFocus = { r, c: currentNumCols - 1 }
+    } else {
+      selectionAnchor = { r, c: 0 }
+      selectionFocus = { r, c: currentNumCols - 1 }
+    }
+    isSelecting = false
+    applySelection()
+    return
+  }
+
+  const th = e.target.closest('th[data-col]')
+  if (th) {
+    e.preventDefault()
+    const c = parseInt(th.dataset.col, 10)
+    if (Number.isNaN(c)) return
+    if (e.shiftKey && selectionAnchor) {
+      selectionFocus = { r: currentNumRows - 1, c }
+    } else {
+      selectionAnchor = { r: 0, c }
+      selectionFocus = { r: currentNumRows - 1, c }
+    }
+    isSelecting = false
+    applySelection()
+    return
+  }
+
+  const td = e.target.closest('td[data-row]')
+  if (!td) return
+  const r = parseInt(td.dataset.row, 10)
+  const c = parseInt(td.dataset.col, 10)
+  if (Number.isNaN(r) || Number.isNaN(c)) return
+
+  if (e.shiftKey && selectionAnchor) {
+    selectionFocus = { r, c }
+  } else {
+    selectionAnchor = { r, c }
+    selectionFocus = { r, c }
+  }
+  isSelecting = true
+  applySelection()
+})
+
+tableContainer.addEventListener('mousemove', (e) => {
+  if (!isSelecting) return
+  const td = e.target.closest('td[data-row]')
+  if (!td) return
+  const r = parseInt(td.dataset.row, 10)
+  const c = parseInt(td.dataset.col, 10)
+  if (Number.isNaN(r) || Number.isNaN(c)) return
+  if (selectionFocus && selectionFocus.r === r && selectionFocus.c === c) return
+  selectionFocus = { r, c }
+  applySelection()
+})
+
+document.addEventListener('mouseup', () => {
+  isSelecting = false
 })
 
 function clearSearch() {
@@ -278,6 +428,35 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault()
     searchInput.focus()
     searchInput.select()
+    return
+  }
+
+  const inInput = document.activeElement && (
+    document.activeElement.tagName === 'INPUT' ||
+    document.activeElement.tagName === 'TEXTAREA' ||
+    document.activeElement.isContentEditable
+  )
+
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'c' || e.key === 'C')) {
+    if (inInput) return
+    if (!selectionAnchor || !selectionFocus) return
+    e.preventDefault()
+    copySelection()
+    return
+  }
+
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'a' || e.key === 'A')) {
+    if (inInput) return
+    if (currentNumRows === 0 || currentNumCols === 0) return
+    e.preventDefault()
+    selectionAnchor = { r: 0, c: 0 }
+    selectionFocus = { r: currentNumRows - 1, c: currentNumCols - 1 }
+    applySelection()
+    return
+  }
+
+  if (e.key === 'Escape' && !inInput) {
+    clearSelection()
   }
 })
 

@@ -85,6 +85,23 @@ td.cell-expanded {
   z-index: 2;
 }
 
+td.cell-selected {
+  background: #d6e9ff !important;
+  box-shadow: inset 0 0 0 1px #0071e3;
+}
+
+tr:hover td.cell-selected {
+  background: #c8e0ff !important;
+}
+
+#table-container {
+  user-select: none;
+}
+
+td.cell-expanded {
+  user-select: text;
+}
+
 #open-btn {
   -webkit-app-region: no-drag;
   background: #0071e3;
