@@ -5,7 +5,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-packager . 'Excel Reader' --platform=darwin --arch=arm64 --out=dist --overwrite --icon=icon.icns --prune=true --ignore=\"^/dist$\" --ignore=\"^/screenshots$\" --ignore=\"^/excel-examples$\" --ignore=\"^/\\.git($|/)\" --ignore=\"^/tests?($|/)\" --ignore=\"(^|/)__tests__($|/)\" --ignore=\"\\.md$\" --ignore=\"\\.map$\" --extend-info=extend-info.plist"
+    "build": "electron-packager . 'Excel Reader' --platform=darwin --arch=arm64 --out=dist --overwrite --icon=icon --prune=true --ignore=\"^/dist$\" --ignore=\"^/screenshots$\" --ignore=\"^/excel-examples$\" --ignore=\"^/\\.git($|/)\" --ignore=\"^/tests?($|/)\" --ignore=\"(^|/)__tests__($|/)\" --ignore=\"\\.md$\" --ignore=\"\\.map$\" --extend-info=extend-info.plist"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
