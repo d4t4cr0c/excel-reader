@@ -215,12 +215,13 @@ function formatCell(cell) {
 
   // Formula cell — use cached result
   if (typeof val === 'object' && (val.formula !== undefined || val.sharedFormula !== undefined)) {
+    const formula = val.formula || val.sharedFormula
     // Check for HYPERLINK formula
-    const hl = parseHyperlink(val.formula || val.sharedFormula)
+    const hl = parseHyperlink(formula)
     if (hl) return { v: hl.text, num: null, link: hl.url }
 
     const result = val.result
-    if (result === null || result === undefined) return { v: null, num: null } // uncached
+    if (result === null || result === undefined) return { v: null, num: null, formula } // uncached
     if (typeof result === 'number') {
       return { v: formatNumber(result, cell.numFmt), num: result }
     }
@@ -294,6 +295,39 @@ function colToLetter(c) {
   return name
 }
 
+// Parse SUM(A1:B2[, C1:D2, ...]) into an array of 0-based ranges. Returns null
+// if the formula isn't a pure SUM-of-ranges (anything else falls back to blank).
+function parseSumRanges(formula) {
+  if (!formula) return null
+  const m = formula.match(/^SUM\(([^)]*)\)$/i)
+  if (!m) return null
+  const colFromLetter = (s) => {
+    let n = 0
+    for (const ch of s.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64)
+    return n - 1
+  }
+  const parts = m[1].split(',').map((s) => s.trim())
+  const ranges = []
+  for (const p of parts) {
+    let rm = p.match(/^\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)$/i)
+    if (rm) {
+      ranges.push({
+        r1: parseInt(rm[2]) - 1, c1: colFromLetter(rm[1]),
+        r2: parseInt(rm[4]) - 1, c2: colFromLetter(rm[3]),
+      })
+      continue
+    }
+    rm = p.match(/^\$?([A-Z]+)\$?(\d+)$/i)
+    if (rm) {
+      const r = parseInt(rm[2]) - 1, c = colFromLetter(rm[1])
+      ranges.push({ r1: r, c1: c, r2: r, c2: c })
+      continue
+    }
+    return null
+  }
+  return ranges
+}
+
 // Parse an Excel range like "B1:D1" into {s:{r,c}, e:{r,c}} (0-based)
 function decodeRange(ref) {
   const m = ref.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/)
@@ -341,16 +375,20 @@ function parseSheet(exWs, palette, hlMap) {
 
   const rows = []
   const rawNums = []
+  const formulas = []   // formula string for uncached cells, else null
+  const numFmts  = []   // numFmt for uncached formula cells
 
   for (let r = 1; r <= maxRow; r++) {
     const row = []
     const numRow = []
+    const fRow = []
+    const fmtRow = []
     const exRow = exWs.getRow(r)
 
     for (let c = 1; c <= maxCol; c++) {
       const cell = exRow.getCell(c)
       const css  = getCellCSS(cell, palette)
-      let { v, num, link } = formatCell(cell)
+      let { v, num, link, formula } = formatCell(cell)
 
       // Fallback: if we have a hyperlink without display text, check raw XML map
       if (link && (v === link || !v) && hlMap) {
@@ -368,27 +406,51 @@ function parseSheet(exWs, palette, hlMap) {
       }
       row.push(cellData)
       numRow.push(num)
+      fRow.push(formula || null)
+      fmtRow.push(formula ? cell.numFmt : null)
     }
     rows.push(row)
     rawNums.push(numRow)
+    formulas.push(fRow)
+    numFmts.push(fmtRow)
   }
 
-  // Compute missing values for rows with mixed null/non-null cells (uncached SUM rows)
-  for (let r = 1; r < rows.length; r++) {
-    const row = rows[r]
-    const hasNull  = row.some((c) => c.v === null)
-    const hasValue = row.some((c) => c.v !== null && c.v !== '')
-    if (!hasNull || !hasValue) continue
-
-    for (let c = 0; c < maxCol; c++) {
-      if (row[c].v !== null) continue
-      let sum = 0, hasNums = false
-      for (let pr = 0; pr < r; pr++) {
-        const n = rawNums[pr][c]
-        if (n !== null) { sum += n; hasNums = true }
+  // Evaluate uncached SUM formulas by parsing the formula's range(s) and summing
+  // from rawNums. Iterate because a column-total may depend on row-totals that
+  // are themselves uncached; each pass resolves any cell whose inputs are known.
+  for (let pass = 0; pass < rows.length + 1; pass++) {
+    let changed = false
+    for (let r = 0; r < rows.length; r++) {
+      for (let c = 0; c < maxCol; c++) {
+        if (rows[r][c].v !== null) continue
+        const ranges = parseSumRanges(formulas[r][c])
+        if (!ranges) continue
+        let sum = 0, ready = true
+        for (const rng of ranges) {
+          for (let rr = rng.r1; rr <= rng.r2 && ready; rr++) {
+            for (let cc = rng.c1; cc <= rng.c2 && ready; cc++) {
+              if (rr < 0 || rr >= rows.length || cc < 0 || cc >= maxCol) continue
+              // Pending uncached formula in our dependencies — wait for a later pass
+              if (rows[rr][cc].v === null && formulas[rr][cc]) { ready = false; break }
+              const n = rawNums[rr][cc]
+              if (typeof n === 'number') sum += n
+            }
+          }
+          if (!ready) break
+        }
+        if (!ready) continue
+        rows[r][c].v = formatNumber(sum, numFmts[r][c])
+        rawNums[r][c] = sum
+        changed = true
       }
-      row[c].v      = hasNums ? sum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''
-      rawNums[r][c] = hasNums ? sum : null
+    }
+    if (!changed) break
+  }
+
+  // Any remaining null cells (unparseable formulas) become blank
+  for (let r = 0; r < rows.length; r++) {
+    for (let c = 0; c < maxCol; c++) {
+      if (rows[r][c].v === null) rows[r][c].v = ''
     }
   }
 
