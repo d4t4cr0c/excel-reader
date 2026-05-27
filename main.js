@@ -347,15 +347,18 @@ function decodeRange(ref) {
 function parseSheet(exWs, palette, hlMap) {
   if (!exWs || exWs.rowCount === 0) return { rows: [], colWidths: [] }
 
-  // exWs.rowCount can be inflated to Excel's max (1,048,576) when a sheet has
-  // formatting on empty trailing rows. Use the largest populated row instead,
-  // otherwise we'd allocate millions of empty rows and OOM the renderer.
+  // exWs.rowCount / columnCount can be inflated when a sheet has formatting on
+  // empty trailing rows/columns. Use the largest populated row/column instead,
+  // otherwise we'd allocate millions of empty cells and OOM the renderer.
   let maxRow = 0
-  exWs.eachRow({ includeEmpty: false }, (_row, rn) => {
+  let maxCol = 0
+  exWs.eachRow({ includeEmpty: false }, (row, rn) => {
     if (rn > maxRow) maxRow = rn
+    row.eachCell({ includeEmpty: false }, (_cell, cn) => {
+      if (cn > maxCol) maxCol = cn
+    })
   })
-  if (maxRow === 0) return { rows: [], colWidths: [] }
-  const maxCol = exWs.columnCount
+  if (maxRow === 0 || maxCol === 0) return { rows: [], colWidths: [] }
 
   // Build merge map from worksheet model: "r,c" (1-based) -> {rowspan,colspan} or {skip:true}
   const mergeMap = {}
