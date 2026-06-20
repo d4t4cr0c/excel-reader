@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const ExcelJS = require('exceljs')
@@ -7,6 +7,122 @@ const SSF = require('ssf')
 const XLSX = require('xlsx')
 
 let pendingFilePaths = [] // files received before app is ready
+
+const MAX_RECENT_FILES = 10
+
+// Recent files are persisted as a JSON array of absolute paths in userData.
+function recentFilesPath() {
+  return path.join(app.getPath('userData'), 'recent-files.json')
+}
+
+// Read the recent list, dropping any entries whose file no longer exists.
+function getRecentFiles() {
+  try {
+    const list = JSON.parse(fs.readFileSync(recentFilesPath(), 'utf-8'))
+    if (!Array.isArray(list)) return []
+    return list.filter((p) => typeof p === 'string' && fs.existsSync(p))
+  } catch {
+    return []
+  }
+}
+
+// Move filePath to the front of the recent list (most recent first), de-duped.
+function addRecentFile(filePath) {
+  try {
+    const abs = path.resolve(filePath)
+    const list = getRecentFiles().filter((p) => p !== abs)
+    list.unshift(abs)
+    fs.writeFileSync(recentFilesPath(), JSON.stringify(list.slice(0, MAX_RECENT_FILES), null, 2))
+    app.addRecentDocument(abs) // macOS Dock / Windows JumpList "Open Recent"
+    buildMenu() // refresh the File > Open Recent submenu
+  } catch { /* ignore — recents are best-effort */ }
+}
+
+function clearRecentFiles() {
+  try {
+    fs.writeFileSync(recentFilesPath(), JSON.stringify([]))
+  } catch { /* ignore */ }
+  app.clearRecentDocuments()
+  buildMenu()
+}
+
+// Drop a single path from the recent list (e.g. it was deleted) and refresh menu.
+function removeRecentFile(filePath) {
+  try {
+    const abs = path.resolve(filePath)
+    const list = getRecentFiles().filter((p) => p !== abs)
+    fs.writeFileSync(recentFilesPath(), JSON.stringify(list, null, 2))
+  } catch { /* ignore */ }
+  buildMenu()
+}
+
+// Tell the user a recent file is gone, then prune it from the list.
+function reportMissingFile(filePath, win) {
+  removeRecentFile(filePath)
+  const opts = {
+    type: 'warning',
+    buttons: ['OK'],
+    message: 'File not found',
+    detail: `"${path.basename(filePath)}" can't be opened — it may have been moved, ` +
+      `renamed, or deleted.\n\nIt has been removed from your recent files.`,
+  }
+  if (win && !win.isDestroyed()) dialog.showMessageBox(win, opts)
+  else dialog.showMessageBox(opts)
+}
+
+// Open a file path, reusing the focused window if it's empty, else a new one.
+function openPathInWindow(filePath) {
+  if (!fs.existsSync(filePath)) {
+    reportMissingFile(filePath, BrowserWindow.getFocusedWindow())
+    return
+  }
+  const focused = BrowserWindow.getFocusedWindow()
+  if (focused && !focused._hasFile) {
+    focused._hasFile = true
+    focused.webContents.send('open-file', filePath)
+  } else {
+    createWindow(filePath)._hasFile = true
+  }
+}
+
+// Trigger the same Open dialog flow as the in-app button.
+function triggerOpenDialog() {
+  const focused = BrowserWindow.getFocusedWindow()
+  if (focused) focused.webContents.send('menu-open')
+  else createWindow()
+}
+
+// Build the application menu, including the dynamic Open Recent submenu.
+function buildMenu() {
+  const isMac = process.platform === 'darwin'
+  const recent = getRecentFiles()
+
+  const recentItems = recent.length
+    ? recent.map((p) => ({ label: path.basename(p), click: () => openPathInWindow(p) }))
+    : [{ label: 'No Recent Files', enabled: false }]
+  recentItems.push(
+    { type: 'separator' },
+    { label: 'Clear Recent', enabled: recent.length > 0, click: clearRecentFiles },
+  )
+
+  const template = [
+    ...(isMac ? [{ role: 'appMenu' }] : []),
+    {
+      label: 'File',
+      submenu: [
+        { label: 'Open…', accelerator: 'CmdOrCtrl+O', click: triggerOpenDialog },
+        { label: 'Open Recent', submenu: recentItems },
+        { type: 'separator' },
+        isMac ? { role: 'close' } : { role: 'quit' },
+      ],
+    },
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    { role: 'windowMenu' },
+  ]
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
 
 function createWindow(filePath) {
   const win = new BrowserWindow({
@@ -49,13 +165,15 @@ function createWindow(filePath) {
 app.on('open-file', (event, filePath) => {
   event.preventDefault()
   if (app.isReady()) {
-    createWindow(filePath)
+    if (fs.existsSync(filePath)) createWindow(filePath)
+    else reportMissingFile(filePath, BrowserWindow.getFocusedWindow())
   } else {
     pendingFilePaths.push(filePath)
   }
 })
 
 app.whenReady().then(() => {
+  buildMenu()
   if (pendingFilePaths.length > 0) {
     pendingFilePaths.forEach((fp) => createWindow(fp))
     pendingFilePaths = []
@@ -672,6 +790,9 @@ function parseCsvContent(text) {
 async function parseFile(filePath) {
   const ext = path.extname(filePath).toLowerCase()
   const buffer = fs.readFileSync(filePath)
+  addRecentFile(filePath) // readFileSync succeeded, so the file is openable
+
+
 
   // CSV/TSV: plain text parsing
   if (ext === '.csv' || ext === '.tsv') {
@@ -735,6 +856,24 @@ ipcMain.handle('open-and-parse-file', async (event) => {
   }
 })
 
-ipcMain.handle('parse-file', async (_event, filePath) => {
-  return parseFile(filePath)
+ipcMain.handle('parse-file', async (event, filePath) => {
+  try {
+    return await parseFile(filePath)
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      reportMissingFile(filePath, BrowserWindow.fromWebContents(event.sender))
+      return null // renderer skips loading on null
+    }
+    throw err
+  }
+})
+
+// Return recent files as { path, name, dir } for the empty-state list.
+const HOME_DIR = require('os').homedir()
+ipcMain.handle('get-recent-files', async () => {
+  return getRecentFiles().map((p) => ({
+    path: p,
+    name: path.basename(p),
+    dir: path.dirname(p).replace(HOME_DIR, '~'),
+  }))
 })

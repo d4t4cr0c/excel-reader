@@ -217,6 +217,67 @@ td.cell-expanded {
   background: #0077ed;
 }
 
+/* Recent files (empty-state list) */
+#recent-files {
+  margin-top: 28px;
+  padding-top: 28px;
+  border-top: 1px solid #e0e0e5;
+  width: 320px;
+  max-width: 80%;
+}
+
+#recent-files.hidden {
+  display: none;
+}
+
+.recent-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8e8e93;
+  margin-bottom: 6px;
+  padding: 0 8px;
+}
+
+.recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.recent-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.recent-item:hover {
+  background: #e8f0fe;
+}
+
+.recent-name {
+  font-size: 13px;
+  color: #1d1d1f;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recent-path {
+  font-size: 11px;
+  color: #8e8e93;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
 /* Table container */
 #table-container {
   position: absolute;

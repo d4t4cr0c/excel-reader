@@ -25,6 +25,43 @@ async function openFile() {
   loadWorkbookData(result)
 }
 
+async function openRecent(filePath) {
+  try {
+    const result = await window.api.parseFile(filePath)
+    if (result) loadWorkbookData(result)
+    // null means the file was missing/unopenable — main already warned & pruned,
+    // so refresh the list to drop the stale entry
+    else renderRecentFiles()
+  } catch {
+    renderRecentFiles()
+  }
+}
+
+async function renderRecentFiles() {
+  const recent = document.getElementById('recent-files')
+  const files = await window.api.getRecentFiles()
+  if (!files || files.length === 0) {
+    recent.classList.add('hidden')
+    recent.innerHTML = ''
+    return
+  }
+  recent.innerHTML = '<div class="recent-title">Recent</div>'
+  const list = document.createElement('ul')
+  list.className = 'recent-list'
+  files.forEach((f) => {
+    const li = document.createElement('li')
+    li.className = 'recent-item'
+    li.title = f.path
+    li.innerHTML =
+      `<span class="recent-name">${escapeHtml(f.name)}</span>` +
+      `<span class="recent-path">${escapeHtml(f.dir)}</span>`
+    li.addEventListener('click', () => openRecent(f.path))
+    list.appendChild(li)
+  })
+  recent.appendChild(list)
+  recent.classList.remove('hidden')
+}
+
 function loadWorkbookData(data) {
   workbookData = data
   document.title = data.fileName + ' — Excel Reader'
@@ -533,6 +570,12 @@ window.api.onOpenFile(async (filePath) => {
   const result = await window.api.parseFile(filePath)
   if (result) loadWorkbookData(result)
 })
+
+// Populate the empty-state recent-files list on launch
+renderRecentFiles()
+
+// File > Open… menu item triggers the same flow as the Open button
+window.api.onMenuOpen(openFile)
 
 document.addEventListener('dragover', (e) => e.preventDefault())
 document.addEventListener('drop', (e) => {
