@@ -757,22 +757,26 @@ function parseCsvContent(text) {
       } else if (ch === '\n' || (ch === '\r' && text[i + 1] === '\n')) {
         row.push(current)
         current = ''
-        if (row.some((c) => c !== '')) rows.push(row)
+        rows.push(row)
         row = []
         if (ch === '\r') i++
       } else if (ch === '\r') {
         row.push(current)
         current = ''
-        if (row.some((c) => c !== '')) rows.push(row)
+        rows.push(row)
         row = []
       } else {
         current += ch
       }
     }
   }
-  // Last field/row
-  row.push(current)
-  if (row.some((c) => c !== '')) rows.push(row)
+  // Last field/row. Skip it only when it's the empty artifact of a trailing
+  // newline (no leftover field text and no fields already collected this row);
+  // genuine blank lines between data are pushed in the loop above and kept.
+  if (current !== '' || row.length > 0) {
+    row.push(current)
+    rows.push(row)
+  }
 
   // Convert to cell format
   const maxCols = rows.reduce((max, r) => Math.max(max, r.length), 0)
