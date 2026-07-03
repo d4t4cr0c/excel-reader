@@ -5,6 +5,7 @@ const ExcelJS = require('exceljs')
 const JSZip = require('jszip')
 const SSF = require('ssf')
 const XLSX = require('xlsx')
+const { evalFormula, toExcelSerial } = require('./formula-eval')
 
 let pendingFilePaths = [] // files received before app is ready
 
@@ -344,7 +345,7 @@ function formatCell(cell) {
       return { v: formatNumber(result, cell.numFmt), num: result }
     }
     if (result instanceof Date) {
-      return { v: formatDate(result, cell.numFmt), num: null }
+      return { v: formatDate(result, cell.numFmt), num: toExcelSerial(result) }
     }
     return { v: String(result), num: null }
   }
@@ -364,7 +365,9 @@ function formatCell(cell) {
   }
 
   if (val instanceof Date) {
-    return { v: formatDate(val, cell.numFmt), num: null }
+    // Expose the Excel serial as num so aggregate formulas (MIN/MAX/AVERAGE over
+    // date columns) can operate on date cells.
+    return { v: formatDate(val, cell.numFmt), num: toExcelSerial(val) }
   }
 
   if (typeof val === 'boolean') {
@@ -388,10 +391,6 @@ function formatNumber(n, numFmt) {
 // ExcelJS returns dates as UTC midnight; converting to an Excel serial keeps
 // the calendar day stable regardless of the host timezone (otherwise users
 // west of UTC would see dates shifted one day earlier).
-const EXCEL_EPOCH_UTC_MS = Date.UTC(1899, 11, 30)
-function toExcelSerial(d) {
-  return (d.getTime() - EXCEL_EPOCH_UTC_MS) / 86400000
-}
 function formatDate(d, numFmt) {
   const utcMidnight = new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
   if (!numFmt || numFmt === 'General') return utcMidnight.toLocaleDateString()
@@ -413,38 +412,6 @@ function colToLetter(c) {
   return name
 }
 
-// Parse SUM(A1:B2[, C1:D2, ...]) into an array of 0-based ranges. Returns null
-// if the formula isn't a pure SUM-of-ranges (anything else falls back to blank).
-function parseSumRanges(formula) {
-  if (!formula) return null
-  const m = formula.match(/^SUM\(([^)]*)\)$/i)
-  if (!m) return null
-  const colFromLetter = (s) => {
-    let n = 0
-    for (const ch of s.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64)
-    return n - 1
-  }
-  const parts = m[1].split(',').map((s) => s.trim())
-  const ranges = []
-  for (const p of parts) {
-    let rm = p.match(/^\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)$/i)
-    if (rm) {
-      ranges.push({
-        r1: parseInt(rm[2]) - 1, c1: colFromLetter(rm[1]),
-        r2: parseInt(rm[4]) - 1, c2: colFromLetter(rm[3]),
-      })
-      continue
-    }
-    rm = p.match(/^\$?([A-Z]+)\$?(\d+)$/i)
-    if (rm) {
-      const r = parseInt(rm[2]) - 1, c = colFromLetter(rm[1])
-      ranges.push({ r1: r, c1: c, r2: r, c2: c })
-      continue
-    }
-    return null
-  }
-  return ranges
-}
 
 // Parse an Excel range like "B1:D1" into {s:{r,c}, e:{r,c}} (0-based)
 function decodeRange(ref) {
@@ -536,32 +503,33 @@ function parseSheet(exWs, palette, hlMap) {
     numFmts.push(fmtRow)
   }
 
-  // Evaluate uncached SUM formulas by parsing the formula's range(s) and summing
-  // from rawNums. Iterate because a column-total may depend on row-totals that
-  // are themselves uncached; each pass resolves any cell whose inputs are known.
+  // Evaluate uncached aggregate formulas (SUM/MIN/MAX/AVERAGE/AVERAGEIF/...) from
+  // rawNums so cells whose stored result was left blank still show a value.
+  // Iterate because a column-total may depend on row-totals that are themselves
+  // uncached; each pass resolves any cell whose inputs are now known.
+  const evalCtx = {
+    rows: rows.length,
+    cols: maxCol,
+    get: (r, c) => rawNums[r][c],
+    // A cell is pending if it still holds an unresolved formula.
+    pending: (r, c) =>
+      r >= 0 && r < rows.length && c >= 0 && c < maxCol &&
+      rows[r][c].v === null && !!formulas[r][c],
+  }
   for (let pass = 0; pass < rows.length + 1; pass++) {
     let changed = false
     for (let r = 0; r < rows.length; r++) {
       for (let c = 0; c < maxCol; c++) {
-        if (rows[r][c].v !== null) continue
-        const ranges = parseSumRanges(formulas[r][c])
-        if (!ranges) continue
-        let sum = 0, ready = true
-        for (const rng of ranges) {
-          for (let rr = rng.r1; rr <= rng.r2 && ready; rr++) {
-            for (let cc = rng.c1; cc <= rng.c2 && ready; cc++) {
-              if (rr < 0 || rr >= rows.length || cc < 0 || cc >= maxCol) continue
-              // Pending uncached formula in our dependencies — wait for a later pass
-              if (rows[rr][cc].v === null && formulas[rr][cc]) { ready = false; break }
-              const n = rawNums[rr][cc]
-              if (typeof n === 'number') sum += n
-            }
-          }
-          if (!ready) break
+        if (rows[r][c].v !== null || !formulas[r][c]) continue
+        const res = evalFormula(formulas[r][c], evalCtx)
+        if (!res || res.pending) continue // unsupported, or deps not ready yet
+        if (res.value === null || res.value === undefined) {
+          // Computed but empty (e.g. no rows matched a criteria) — render blank.
+          rows[r][c].v = ''
+        } else {
+          rows[r][c].v = formatNumber(res.value, numFmts[r][c])
+          rawNums[r][c] = res.value
         }
-        if (!ready) continue
-        rows[r][c].v = formatNumber(sum, numFmts[r][c])
-        rawNums[r][c] = sum
         changed = true
       }
     }
