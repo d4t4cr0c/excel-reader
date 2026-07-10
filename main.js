@@ -395,10 +395,12 @@ function formatDate(d, numFmt) {
   const utcMidnight = new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
   if (!numFmt || numFmt === 'General') return utcMidnight.toLocaleDateString()
   try {
-    return SSF.format(numFmt, toExcelSerial(d))
-  } catch {
-    return utcMidnight.toLocaleDateString()
-  }
+    // SSF returns '' (rather than throwing) for serials outside Excel's
+    // valid date range, e.g. a year past 9999 — treat that as a failure too.
+    const s = SSF.format(numFmt, toExcelSerial(d))
+    if (s !== '') return s
+  } catch {}
+  return utcMidnight.toLocaleDateString()
 }
 
 // Convert column number (1-based) to Excel letter (1=A, 2=B, ..., 27=AA)
