@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Excel Reader</title>
   <link rel="stylesheet" href="styles.css" />
+  <script>
+    // Apply saved theme before first paint to avoid a flash of the wrong mode.
+    (function () {
+      var saved = localStorage.getItem('theme')
+      var theme = saved || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+      document.documentElement.setAttribute('data-theme', theme)
+    })()
+  </script>
 </head>
 <body>
   <div id="titlebar">
@@ -12,6 +20,7 @@
     <div id="titlebar-right">
       <input id="search-input" type="search" placeholder="Search..." spellcheck="false" />
       <span id="search-count"></span>
+      <button id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode"></button>
       <button id="open-btn">Open File</button>
     </div>
   </div>

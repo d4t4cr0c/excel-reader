@@ -101,7 +101,7 @@ function renderSheet(sheetData) {
   const freezeCols = sheetData.freezeCols || 0
 
   if (!rows || rows.length === 0) {
-    tableContainer.innerHTML = '<p style="padding:20px;color:#6e6e73">This sheet is empty.</p>'
+    tableContainer.innerHTML = '<p style="padding:20px;color:var(--text-muted)">This sheet is empty.</p>'
     return
   }
 
@@ -219,6 +219,24 @@ function escapeAttr(str) {
 
 openBtn.addEventListener('click', openFile)
 openBtnCenter.addEventListener('click', openFile)
+
+const themeToggle = document.getElementById('theme-toggle')
+
+function applyThemeIcon() {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+  // Show the icon for the mode you'd switch *to*
+  themeToggle.textContent = isDark ? '☀️' : '🌙'
+}
+
+themeToggle.addEventListener('click', () => {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+  const next = isDark ? 'light' : 'dark'
+  document.documentElement.setAttribute('data-theme', next)
+  localStorage.setItem('theme', next)
+  applyThemeIcon()
+})
+
+applyThemeIcon()
 
 tableContainer.addEventListener('dblclick', (e) => {
   const td = e.target.closest('td')
