@@ -141,10 +141,13 @@ function renderSheet(sheetData) {
       const spanAttr =
         (rowspan > 1 ? ` rowspan="${rowspan}"` : '') +
         (colspan > 1 ? ` colspan="${colspan}"` : '')
+      const multiline = /[\r\n]/.test(value)
+      const text = cellText(value)
       const content = cell.link
-        ? `<a href="${escapeAttr(cell.link)}" target="_blank" rel="noopener">${escapeHtml(value)}</a>`
-        : escapeHtml(value)
-      html += `<td class="${isNum ? 'numeric' : ''}"${styleAttr}${spanAttr} data-row="${r}" data-col="${c}" data-rowspan="${rowspan}" data-colspan="${colspan}" title="${escapeAttr(value)}">${content}</td>`
+        ? `<a href="${escapeAttr(cell.link)}" target="_blank" rel="noopener">${text}</a>`
+        : text
+      const cls = [isNum ? 'numeric' : '', multiline ? 'multiline' : ''].filter(Boolean).join(' ')
+      html += `<td class="${cls}"${styleAttr}${spanAttr} data-row="${r}" data-col="${c}" data-rowspan="${rowspan}" data-colspan="${colspan}" title="${escapeAttr(value)}">${content}</td>`
     }
     html += '</tr>'
   })
@@ -207,6 +210,17 @@ function colLetter(index) {
     index = Math.floor(index / 26)
   }
   return name
+}
+
+// Cell text as HTML. Values with embedded newlines (Excel alt+enter, quoted CSV
+// fields) become one span per line, separated by a marker that only shows while
+// the cell is collapsed — CSS turns the spans into blocks once it's expanded.
+function cellText(value) {
+  const lines = value.split(/\r\n|\r|\n/)
+  if (lines.length === 1) return escapeHtml(value)
+  return lines
+    .map((line) => `<span class="cell-line">${escapeHtml(line)}</span>`)
+    .join('<span class="cell-line-break">↵</span>')
 }
 
 function escapeHtml(str) {

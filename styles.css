@@ -150,6 +150,31 @@ td.cell-expanded {
   z-index: 2;
 }
 
+/* Multi-line cells: collapsed rows stay one line high, with a faint ↵ where
+   each break falls; expanding the cell lays the lines out for real. */
+.cell-line-break {
+  color: var(--text-faint);
+  font-size: 0.85em;
+  padding: 0 3px;
+  user-select: none;
+}
+
+td.multiline.search-current-cell,
+td.multiline.cell-expanded {
+  white-space: pre-wrap;
+}
+
+td.multiline.search-current-cell .cell-line,
+td.multiline.cell-expanded .cell-line {
+  display: block;
+  min-height: 1em;
+}
+
+td.multiline.search-current-cell .cell-line-break,
+td.multiline.cell-expanded .cell-line-break {
+  display: none;
+}
+
 td.cell-selected {
   background: var(--selection-bg) !important;
   box-shadow: inset 0 0 0 1px var(--accent);
