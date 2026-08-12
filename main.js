@@ -71,6 +71,36 @@ function reportMissingFile(filePath, win) {
   else dialog.showMessageBox(opts)
 }
 
+// Tell the user we opened the file but couldn't read it as a spreadsheet.
+function reportUnsupportedFile(filePath, detail, win) {
+  removeRecentFile(filePath)
+  const opts = {
+    type: 'warning',
+    buttons: ['OK'],
+    message: "Can't open this file",
+    detail,
+  }
+  if (win && !win.isDestroyed()) dialog.showMessageBox(win, opts)
+  else dialog.showMessageBox(opts)
+}
+
+// Surface any parse failure to the user as a dialog. Every path through here
+// ends with the renderer getting null, so a failed open never blanks a window.
+function reportParseError(err, filePath, win) {
+  if (err && err.code === 'ENOENT') {
+    reportMissingFile(filePath, win)
+  } else if (err && err.code === 'EUNSUPPORTED') {
+    reportUnsupportedFile(filePath, err.message, win)
+  } else {
+    reportUnsupportedFile(
+      filePath,
+      `"${path.basename(filePath)}" couldn't be opened.\n\n` +
+        `${(err && err.message) || 'Unknown error.'}`,
+      win
+    )
+  }
+}
+
 // Open a file path, reusing the focused window if it's empty, else a new one.
 function openPathInWindow(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -761,19 +791,69 @@ function parseCsvContent(text) {
   return { rows: cellRows, colWidths: [] }
 }
 
+// An openable file whose contents aren't a workbook we can read. Carries a
+// human-readable reason so the UI can say *why* rather than just failing.
+function unsupportedFileError(detail) {
+  const err = new Error(detail)
+  err.code = 'EUNSUPPORTED'
+  return err
+}
+
+// Best-effort identification of what a file actually is, by content rather than
+// by extension — a file renamed to .xlsx is the common case (e.g. an ODS export
+// saved with an .xlsx name). Returns { name, ext, convertible }, or null if
+// unrecognized. `convertible` marks formats a spreadsheet app can re-save as
+// .xlsx, so we only suggest that when it's actually useful advice.
+async function identifyFormat(buffer) {
+  if (buffer.length >= 4 && buffer.readUInt32BE(0) === 0xd0cf11e0) {
+    return { name: 'a legacy Microsoft Office file', ext: '.xls / .doc / .ppt', convertible: true }
+  }
+  if (buffer.slice(0, 4).toString('latin1') === '%PDF') {
+    return { name: 'a PDF', ext: '.pdf', convertible: false }
+  }
+  if (buffer.slice(0, 2).toString('latin1') !== 'PK') return null
+
+  try {
+    const zip = await JSZip.loadAsync(buffer)
+    const mimetype = (await zip.file('mimetype')?.async('text'))?.trim() || ''
+    const ODF = 'application/vnd.oasis.opendocument.'
+    if (mimetype.startsWith(ODF)) {
+      const kind = mimetype.slice(ODF.length)
+      const names = {
+        spreadsheet: ['an OpenDocument Spreadsheet', '.ods', true],
+        text: ['an OpenDocument Text document', '.odt', false],
+        presentation: ['an OpenDocument Presentation', '.odp', false],
+      }
+      const [name, ext, convertible] = names[kind] || ['an OpenDocument file', '.' + kind, false]
+      return { name, ext, convertible }
+    }
+    if (zip.file('word/document.xml')) {
+      return { name: 'a Word document', ext: '.docx', convertible: false }
+    }
+    if (zip.file(/^ppt\/slides\//).length) {
+      return { name: 'a PowerPoint presentation', ext: '.pptx', convertible: false }
+    }
+    return { name: 'a Zip archive, not a spreadsheet', ext: '.zip', convertible: false }
+  } catch {
+    return null
+  }
+}
+
 async function parseFile(filePath) {
   const ext = path.extname(filePath).toLowerCase()
   const buffer = fs.readFileSync(filePath)
-  addRecentFile(filePath) // readFileSync succeeded, so the file is openable
+  const data = await parseFileBuffer(buffer, ext, path.basename(filePath))
+  addRecentFile(filePath) // only remember files we could actually read
+  return data
+}
 
-
-
+async function parseFileBuffer(buffer, ext, fileName) {
   // CSV/TSV: plain text parsing
   if (ext === '.csv' || ext === '.tsv') {
     const text = buffer.toString('utf-8')
     const sheetName = 'Sheet1'
     return {
-      fileName: path.basename(filePath),
+      fileName,
       sheetNames: [sheetName],
       sheets: { [sheetName]: parseCsvContent(text) },
     }
@@ -781,7 +861,16 @@ async function parseFile(filePath) {
 
   // Legacy .xls (BIFF) — ExcelJS only handles OOXML, so use SheetJS
   if (ext === '.xls') {
-    return parseXlsBuffer(buffer, path.basename(filePath))
+    let xlsData
+    try {
+      xlsData = parseXlsBuffer(buffer, fileName)
+    } catch {
+      throw unsupportedFileError(await unsupportedDetail(buffer, fileName, ext))
+    }
+    if (xlsData.sheetNames.length === 0) {
+      throw unsupportedFileError(await unsupportedDetail(buffer, fileName, ext))
+    }
+    return xlsData
   }
 
   // Modern Excel formats (.xlsx, .xlsm)
@@ -789,7 +878,17 @@ async function parseFile(filePath) {
   const palette = meta.palette || DEFAULT_INDEXED_COLORS
 
   const exWb = new ExcelJS.Workbook()
-  await exWb.xlsx.load(buffer)
+  try {
+    await exWb.xlsx.load(buffer)
+  } catch {
+    throw unsupportedFileError(await unsupportedDetail(buffer, fileName, ext))
+  }
+
+  // ExcelJS resolves with an empty workbook rather than throwing when the zip
+  // isn't OOXML at all, so an empty sheet list means "couldn't read it".
+  if (exWb.worksheets.length === 0) {
+    throw unsupportedFileError(await unsupportedDetail(buffer, fileName, ext))
+  }
 
   const sheetNames = exWb.worksheets.map((ws) => ws.name)
   const sheets = {}
@@ -798,7 +897,25 @@ async function parseFile(filePath) {
     sheets[ws.name] = parseSheet(ws, palette, hlMap)
   }
 
-  return { fileName: path.basename(filePath), sheetNames, sheets }
+  return { fileName, sheetNames, sheets }
+}
+
+const SUPPORTED_LIST = 'Excel Reader can open .xlsx, .xlsm, .xls, .csv, and .tsv files.'
+const CONVERT_HINT =
+  'Open it in Excel, Numbers, or LibreOffice and save it as .xlsx to view it here.'
+
+// Build the explanation shown to the user for a file we can't read.
+async function unsupportedDetail(buffer, fileName, ext) {
+  const actual = await identifyFormat(buffer)
+  if (!actual) {
+    return `"${fileName}" isn't a spreadsheet Excel Reader can read — it may be ` +
+      `damaged, or saved in an unsupported format.\n\n${SUPPORTED_LIST}`
+  }
+  // Only call out the mismatch when the name actually disagrees with the bytes.
+  const lead = actual.ext === ext
+    ? `"${fileName}" is ${actual.name}, which Excel Reader can't open.`
+    : `"${fileName}" is ${actual.name} (${actual.ext}), despite its name.`
+  return `${lead} ${SUPPORTED_LIST}` + (actual.convertible ? `\n\n${CONVERT_HINT}` : '')
 }
 
 ipcMain.handle('open-and-parse-file', async (event) => {
@@ -813,7 +930,13 @@ ipcMain.handle('open-and-parse-file', async (event) => {
   if (canceled || filePaths.length === 0) return null
 
   const filePath = filePaths[0]
-  const data = await parseFile(filePath)
+  let data
+  try {
+    data = await parseFile(filePath)
+  } catch (err) {
+    reportParseError(err, filePath, win)
+    return null // renderer skips loading on null
+  }
 
   // Open in a new window if the current window already has a file loaded
   const isEmptyWindow = !win._hasFile
@@ -834,11 +957,8 @@ ipcMain.handle('parse-file', async (event, filePath) => {
   try {
     return await parseFile(filePath)
   } catch (err) {
-    if (err && err.code === 'ENOENT') {
-      reportMissingFile(filePath, BrowserWindow.fromWebContents(event.sender))
-      return null // renderer skips loading on null
-    }
-    throw err
+    reportParseError(err, filePath, BrowserWindow.fromWebContents(event.sender))
+    return null // renderer skips loading on null
   }
 })
 

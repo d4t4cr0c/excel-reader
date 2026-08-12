@@ -63,6 +63,9 @@ async function renderRecentFiles() {
 }
 
 function loadWorkbookData(data) {
+  // Main reports unreadable files and returns null, so this is only a guard
+  // against a workbook slipping through with nothing to render.
+  if (!data || !data.sheetNames || data.sheetNames.length === 0) return
   workbookData = data
   document.title = data.fileName + ' — Excel Reader'
   document.getElementById('app-title').textContent = data.fileName
