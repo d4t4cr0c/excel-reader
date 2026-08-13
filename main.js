@@ -588,9 +588,13 @@ function parseSheet(exWs, palette, hlMap) {
   const freezeCols = view && view.state === 'frozen' ? (view.xSplit || 0) : 0
 
   return {
-    rows: rows.map((row) => row.map((cell) => {
+    rows: rows.map((row, r) => row.map((cell, c) => {
       const rawV = cell.v ?? ''
       const out = { v: typeof rawV === 'string' ? decodeEntities(rawV) : rawV, css: cell.css }
+      // Numbers and dates carry a raw value; the renderer aligns on this rather
+      // than re-sniffing the formatted text, which a thousands separator or a
+      // '%' suffix would otherwise make look non-numeric.
+      if (typeof rawNums[r][c] === 'number') out.num = true
       if (cell.link) out.link = decodeEntities(cell.link)
       if (cell.skip) out.skip = true
       if (cell.rowspan) out.rowspan = cell.rowspan
@@ -650,6 +654,8 @@ function formatXlsCell(cell) {
   }
 
   const out = { v: decodeEntities(v), css: getXlsCellCSS(cell) }
+  // 'n' = number, 'd' = date (cellDates is on) — both right-align like Excel
+  if (cell.t === 'n' || cell.t === 'd') out.num = true
   if (cell.l && cell.l.Target) out.link = decodeEntities(cell.l.Target)
   return out
 }
@@ -729,6 +735,12 @@ function parseXlsBuffer(buffer, fileName) {
   return { fileName, sheetNames, sheets }
 }
 
+// CSV fields carry no type, so numeric alignment has to come from the text:
+// an optionally signed, optionally comma-grouped decimal, with an optional %.
+function looksNumeric(s) {
+  return /^[-+]?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?%?$/.test(s.trim())
+}
+
 // Parse a CSV file into the same format as parseSheet output
 function parseCsvContent(text) {
   // Parse CSV handling quoted fields with commas/newlines
@@ -783,7 +795,10 @@ function parseCsvContent(text) {
   const cellRows = rows.map((r) => {
     const cells = []
     for (let c = 0; c < maxCols; c++) {
-      cells.push({ v: r[c] || '', css: '' })
+      const v = r[c] || ''
+      const cell = { v, css: '' }
+      if (looksNumeric(v)) cell.num = true
+      cells.push(cell)
     }
     return cells
   })

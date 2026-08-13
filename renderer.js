@@ -137,7 +137,7 @@ function renderSheet(sheetData) {
       const cell = row[c] || { v: '', css: '' }
       if (cell.skip) continue
       const value = cell.v !== undefined ? String(cell.v) : ''
-      const isNum = value !== '' && !isNaN(value) && !value.includes('/')
+      const isNum = cell.num === true && value !== ''
       const styleAttr = cell.css ? ` style="${escapeAttr(cell.css)}"` : ''
       const rowspan = cell.rowspan > 1 ? cell.rowspan : 1
       const colspan = cell.colspan > 1 ? cell.colspan : 1
